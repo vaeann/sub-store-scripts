@@ -372,6 +372,38 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 
 ---
 
+## 附：节点改名（去掉名字里的某个字符）
+
+比如机场把节点命名成 `日本 A09`，想把那个大写 `A` 去掉。**这跟检测脚本无关**，用 Sub-Store 的节点操作即可，不要动脚本。
+
+**方式一：UI 正则操作（推荐）**
+
+在该订阅的「节点操作」里加一条 **正则删除**（或正则重命名）：
+
+| 字段 | 填 |
+| --- | --- |
+| 正则 | `\bA(?=\d)` |
+| 替换为 | 空 |
+
+→ `日本 A09` 变成 `日本 09`。
+
+> 为什么不用直接删 `A`？因为那样会误伤 `AWS`、`LA`、`USA` 这类名字。`\bA(?=\d)` 的含义是"**独立成词、且后面紧跟数字的 A**"，只命中节点编号前缀。
+
+**方式二：脚本操作（不想点 UI 时）**
+
+加一段脚本操作，**放在检测脚本之前**：
+
+```js
+async function operator(proxies = []) {
+  proxies.forEach(p => { p.name = p.name.replace(/\bA(?=\d)/g, '') })
+  return proxies
+}
+```
+
+⚠️ **改名会改变节点名**：如果 Surge 的策略组是按精确名称列成员，改完要同步调整；用 `policy-regex-filter` 按正则筛节点的话不受影响。
+
+---
+
 ## 致谢 / 参考
 
 - 检测方法与阻断地区列表参考 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 的媒体解锁检测模块
