@@ -136,6 +136,22 @@ SUB_STORE_PRODUCE_CRON=0 */4 * * *,sub,你的订阅name
 
 **必须同时满足**：脚本参数开 `cache=true`，且**不要用 `disable_failed_cache=true`** —— 那个参数会让失败节点每次运行都重新检测，缓存只省一半，"缓存加速"基本失效。
 
+**改完参数后记得更新外部资源**：`script-path` 指向 GitHub releases 上的 `sub-store-1.min.js` / `cron-sync-artifacts.min.js`，Surge 会缓存这些远程脚本。到 **Surge 配置列表里的「外部资源」** 点一次更新，否则可能还在跑旧版本。
+
+**三个容易踩的坑**：
+
+1. ⚠️ **Surge 脚本的 `timeout` 默认只有 5 秒**。如果不用模块参数、而是自己手写 cron 脚本行，**必须显式写 `timeout=900`**，否则任务跑 5 秒就被杀掉。官方模块里是 `timeout={{{timeout}}}`（默认 900），走模块参数则不用管。
+2. `produce_sub` / `produce_col` 填的是订阅的 **name，不是显示名（displayName）**；名称若需 `encodeURIComponent` 编码，**编码后再用 `,` 连接**。执行顺序是：先并发跑完所有单条订阅（`sub`），再并发跑组合订阅（`col`）——所以 Gemini 脚本挂在组合订阅上时要填 `produce_col`。
+3. 不要在**模块参数**和**手写脚本行**里同时加，会跑两次。
+
+**备选：手写 cron 脚本行**（模块参数里找不到 `produce` 时用；放进自己配置／本地模块的 `[Script]` 段）：
+
+```
+Produce = type=cron,cronexp="0 */4 * * *",timeout=900,wake-system=1,script-path=https://github.com/sub-store-org/Sub-Store/releases/latest/download/cron-sync-artifacts.min.js,argument="sub=你的订阅name"
+```
+
+**备选：Gist 同步（最稳，但有延迟）** —— 让 Sub-Store 定时把处理好的订阅上传到**自己的私有 Gist**，Surge 直接订阅那个 Gist 的 raw 链接。这样 Surge 拉到的是**静态文件，完全不跑脚本**，永远不会超时。代价是节点更新有延迟（取决于同步周期）。
+
 ### 怎么判断缓存到底有没有生效
 
 **方法 1：看运行日志（最直接）。** 每次运行结束会输出一行统计：
