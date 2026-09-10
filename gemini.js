@@ -50,15 +50,16 @@ async function operator(proxies = [], targetPlatform, context) {
   const { isLoon, isSurge, isEgern } = $.env
   if (!isLoon && !isSurge && !isEgern) throw new Error('仅支持 Loon、Surge 和 Egern')
 
-  const includeUnsupportedProxy = $arguments.include_unsupported_proxy
-  const cacheEnabled = $arguments.cache
-  const disableFailedCache = $arguments.disable_failed_cache || $arguments.ignore_failed_error
+  const includeUnsupportedProxy = bool($arguments.include_unsupported_proxy, false)
+  const cacheEnabled = bool($arguments.cache, false)
+  const disableFailedCache =
+    bool($arguments.disable_failed_cache, false) || bool($arguments.ignore_failed_error, false)
   const cache = scriptResourceCache
 
   const geminiPrefix = $arguments.gemini_prefix ?? '[Gemini] '
   const unavailablePrefix = $arguments.unavailable_prefix
-  const showRegion = !!$arguments.show_region
-  const keepOnlyOk = !!$arguments.keep_only_ok
+  const showRegion = bool($arguments.show_region, false)
+  const keepOnlyOk = bool($arguments.keep_only_ok, false)
   const method = $arguments.method || 'get'
   const url = decode($arguments.url || 'https://gemini.google.com')
   const ua = decode(
@@ -215,6 +216,16 @@ async function operator(proxies = [], targetPlatform, context) {
     } catch (e) {
       return value
     }
+  }
+
+  // 布尔参数解析: URL query 传进来的都是字符串, 不能直接 !!
+  function bool(value, defaultValue = false) {
+    if (value === undefined || value === null || value === '') return defaultValue
+    if (typeof value === 'boolean') return value
+    const s = String(value).trim().toLowerCase()
+    if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true
+    return defaultValue
   }
 
   // 请求

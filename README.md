@@ -1,65 +1,60 @@
-# Gemini 节点可用性检测脚本
+# Sub-Store 脚本集合
 
-一个 Surge / Loon / Egern 的 **Sub-Store 脚本**，逐个节点检测 **Gemini 是否可用**，并给可用节点打标签。
+Surge / Loon / Egern 用的 **Sub-Store 节点检测脚本**，逐个节点检测服务可用性并给节点打标签。
 
-写法与 [xream/scripts 的 gpt.js](https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/gpt.js) 保持一致，可直接和 GPT 检测串联使用。
+| 脚本 | 用途 | 判定依据 |
+| --- | --- | --- |
+| [`gemini.js`](gemini.js) | Gemini 可用性 | 解析 `gemini.google.com` 页面里的落地区域码 |
+| [`gpt.js`](gpt.js) | ChatGPT 可用性 | 请求 OpenAI 端点，检查响应体特征 |
 
----
-
-## 检测原理
-
-通过**指定节点**请求 `https://gemini.google.com`，从页面 bootstrap 数据中提取**区域码**：
-
-```
-,2,1,200,"XXX"        ← XXX 为 ISO 3166-1 alpha-3 区域码，如 USA / JPN / SGP / HKG / CHN
-```
-
-- 区域码**不在**不支持列表 → ✅ 可用
-- 区域码**在**不支持列表 → ❌ 地区不支持
-- 拿不到区域码 → 页面异常或请求失败
-
-当前不支持地区（与上游一致）：
-
-```
-CHN  RUS  BLR  CUB  IRN  PRK  SYR  HKG  MAC
-```
-
-> 这是 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 与 subs-check 等主流工具使用的**标准做法**
-> （源码位置：`crates/clash-verge-media-unlock/src/gemini.rs`），比"抓网页关键词"可靠得多 —— 见文末对比。
+两者结构一致，可**串在同一个订阅上**，得到 `[GPT⁺] [Gemini] 香港01` 这样的名称。
 
 ---
 
 ## 用法
 
-### 1. 接入 Sub-Store
-
-在 Sub-Store 里给订阅添加一个**脚本操作**（筛选 / 处理），脚本填本仓库 `gemini.js` 的地址，例如：
+在 Sub-Store 里给订阅添加**脚本操作**，脚本填对应文件的地址：
 
 ```
-https://raw.githubusercontent.com/<你的用户名>/<仓库名>/main/gemini.js
+https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gemini.js
+https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 ```
 
-带参数时用 `#` 追加（多个参数用 `&` 连接）：
+带参数用 `#` 追加（多个用 `&`），例如：
 
 ```
-https://raw.githubusercontent.com/<你的用户名>/<仓库名>/main/gemini.js#cache=true&show_region=true
+...gpt.js#mode=both&cache=true
+...gemini.js#keep_only_ok=true&show_region=true
 ```
 
-### 2. 常见组合
+> URL 形式传参时，含空格/特殊字符的值需要 `encodeURIComponent`；在 Sub-Store 前端的可视化参数编辑器里填则不需要。
 
-| 需求 | 参数 |
-| --- | --- |
-| 只打标签，不改节点顺序 | （默认） |
-| 只保留能用 Gemini 的节点 | `#keep_only_ok=true` |
-| 标签里带上落地地区码 | `#show_region=true` |
-| 给不可用节点也打标 | `#unavailable_prefix=[X-Gemini] ` |
-| 开启缓存（降低请求量） | `#cache=true` |
+## 共同特性
 
-> 参数里若含空格 / 特殊字符，在 URL 形式中需 `encodeURIComponent`；直接在 Sub-Store 前端的可视化参数编辑器里填则不需要。
+- **并发池**（`concurrency`）、**重试**（`retries` / `retry_delay`）、**缓存**（`cache`，成功与失败分开缓存）
+- 通过 Sub-Store 的 `policy-descriptor` 机制让请求**从指定节点出去**，实现逐节点检测
+- 结果既写进**节点名前缀**（方便肉眼识别），也写进 `_xxx` 字段（方便后续脚本筛选）
+- **布尔参数按语义解析**（`true/false/1/0/yes/no/on/off`）—— 避免 URL 传 `x=false` 被当成真值
 
 ---
 
-## 参数
+## gemini.js — Gemini 可用性检测
+
+### 原理
+
+请求 `https://gemini.google.com`，从页面 bootstrap 数据里提取区域码：
+
+```
+,2,1,200,"XXX"        XXX = ISO 3166-1 alpha-3 区域码，如 USA / JPN / SGP / HKG / CHN
+```
+
+区域码**不在**不支持列表 → 可用；**在** → 地区不支持。
+
+不支持地区（与上游一致）：`CHN RUS BLR CUB IRN PRK SYR HKG MAC`
+
+这是 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev)（`crates/clash-verge-media-unlock/src/gemini.rs`）与 subs-check 采用的标准做法。
+
+### 参数
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
@@ -69,58 +64,121 @@ https://raw.githubusercontent.com/<你的用户名>/<仓库名>/main/gemini.js#c
 | `concurrency` | `10` | 并发数 |
 | `method` | `get` | 请求方法 |
 | `url` | `https://gemini.google.com` | 检测地址 |
-| `ua` | macOS Chrome | 请求头 User-Agent（与上游一致） |
-| `gemini_prefix` | `[Gemini] ` | 可用节点显示前缀 |
+| `ua` | macOS Chrome | User-Agent（与上游一致） |
+| `gemini_prefix` | `[Gemini] ` | 可用节点前缀 |
 | `show_region` | `false` | 开启后前缀变为 `[Gemini USA] ` |
-| `unavailable_prefix` | — | 给不可用节点加前缀，如 `[X-Gemini] ` |
+| `unavailable_prefix` | — | 给不可用节点也加前缀，如 `[X-Gemini] ` |
 | `keep_only_ok` | `false` | 只保留可用节点 |
-| `include_unsupported_proxy` | `false` | 传递给运行环境时包含官方/商店版不支持的协议 |
+| `include_unsupported_proxy` | `false` | 传递节点时包含官方/商店版不支持的协议 |
 | `cache` | `false` | 使用缓存 |
 | `disable_failed_cache` / `ignore_failed_error` | `false` | 不缓存失败结果 |
 
-## 写入的节点字段
+### 写入的字段
 
-| 字段 | 值 | 说明 |
-| --- | --- | --- |
-| `_gemini` | `true` / `false` | 是否可用，可用于后续脚本筛选 |
-| `_gemini_status` | `ok` / `blocked` / `unknown` / `failed` / `cached_failed` | 判定结果 |
-| `_gemini_region` | 如 `USA` | 识别到的区域码（有则写入） |
-| `_gemini_latency` | 数字（ms） | 实际请求时的延迟 |
+| 字段 | 说明 |
+| --- | --- |
+| `_gemini` | `true` / `false` 是否可用 |
+| `_gemini_status` | `ok` / `blocked` / `unknown` / `failed` / `cached_failed` |
+| `_gemini_region` | 区域码（识别到才有），如 `USA` |
+| `_gemini_latency` | 延迟（ms） |
 
 ---
 
-## 与 gpt.js 的差异
+## gpt.js — ChatGPT 检测（改进版）
 
-| | gpt.js | 本脚本 |
+结构沿用 [xream/scripts 的 gpt.js](https://github.com/xream/scripts/blob/main/surge/modules/sub-store-scripts/check/gpt.js)，判定标准对齐 clash-verge-rev 与 subs-check。
+
+### 相比原版的三处改进
+
+**1. 判定不再依赖状态码与 JSON 字段路径**
+
+原版：
+
+```js
+status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.error_type || body?.cf_details)
+```
+
+两个隐患：
+
+- 三个字段用 `||` 短路，**只取第一个有值的**。若 `error.code` 有值（如 `api_key_invalid`）而 `unsupported_country` 恰恰出现在 `cf_details` 里，就取不到 → **把"地区被封"的节点误判成可用**。
+- 状态码**硬编码 `403`**，上游行为一变就会整体误判。
+
+新版：直接对整个响应体做 `/unsupported_country/i` 匹配，只排除 5xx 与空响应，与 `clash-verge-rev chatgpt.rs`、`subs-check openai.go` 完全一致。
+
+**2. 支持双端点，区分「App 可用」与「Web 可用」**
+
+| 端点 | 地址 |
+| --- | --- |
+| app | `https://ios.chat.openai.com`（Android 客户端为 `android.chat.openai.com`） |
+| web | `https://api.openai.com/compliance/cookie_requirements` |
+
+两者都通过 → `[GPT⁺]`；只过一个也各自标记。这正是 subs-check 要分 `GPT⁺` / `GPT` 两级标签的原因。
+
+**3. 请求头与真机对齐**
+
+请求 `ios/android.chat.openai.com` 时带上 ChatGPT App 的 UA 与 `X-Requested-With: com.openai.chatgpt` 等头部（与 subs-check 一致），而不是原版的 Safari UA。可用 `ua` 参数改回。
+
+另新增 `reject_vpn`（默认 `true`，与 subs-check 一致）：响应体命中 `vpn` 关键词时判为不可用。
+
+### 模式与标签
+
+| `mode` | 检测内容 | 结果标签 |
 | --- | --- | --- |
-| 判定依据 | 请求 `ios.chat.openai.com`，看状态码 403 且不含 `unsupported_country` | 请求 `gemini.google.com`，解析页面区域码 |
-| 附加字段 | `_gpt`、`_gpt_latency` | `_gemini`、`_gemini_status`、`_gemini_region`、`_gemini_latency` |
-| 额外能力 | — | 可按地区码打标 / 只保留可用节点 |
+| `app`（默认，同原版） | 仅 App 端点 | `[GPT] ` |
+| `web` | 仅 Web 端点 | `[GPT-Web] ` |
+| `both` | 两个端点 | 都过 `[GPT⁺] `；仅 App `[GPT] `；仅 Web `[GPT-Web] ` |
 
-两者结构完全一致，可同时挂在同一个订阅上，得到 `[GPT] [Gemini] 香港01` 这样的名称。
+### 参数
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `mode` | `app` | `app` / `web` / `both` |
+| `client` | `iOS` | `iOS` / `Android`（决定 app 端点与 UA） |
+| `timeout` / `retries` / `retry_delay` / `concurrency` / `method` | 同 gemini | — |
+| `ua` | ChatGPT iOS App UA | app 端点 User-Agent |
+| `web_ua` | macOS Chrome | web 端点 User-Agent |
+| `app_url` / `web_url` | 见上表 | 自定义端点 |
+| `gpt_prefix` | `[GPT] ` | App 可用前缀 |
+| `gpt_web_prefix` | `[GPT-Web] ` | 仅 Web 可用前缀 |
+| `gpt_plus_prefix` | `[GPT⁺] ` | 两者都可用前缀 |
+| `unusable_prefix` | — | 给不可用节点加前缀 |
+| `reject_vpn` | `true` | 命中 `vpn` 关键词即判不可用 |
+| `keep_only_ok` | `false` | 只保留可用节点 |
+| `include_unsupported_proxy` / `cache` / `disable_failed_cache` | 同上 | — |
+
+### 写入的字段
+
+| 字段 | 说明 |
+| --- | --- |
+| `_gpt` | App 可用 |
+| `_gpt_web` | Web 可用 |
+| `_gpt_plus` | 两者都可用 |
+| `_gpt_status` | `ok` / `unsupported_country` / `vpn` / `http_xxx` / `failed` / `cached_failed` |
+| `_gpt_latency` / `_gpt_web_latency` | 对应延迟 |
 
 ---
 
 ## 附：为什么"抓网页关键词"不可靠
 
-有些面板脚本（例如 `Ai-Check.js`）用"请求 `gemini.google.com/app` 后，在 HTML 里搜 `unavailable` / `country` / `不可用` 等关键词"来判断 Gemini 可用性。这种做法问题明显：
+有些面板脚本用"请求 `gemini.google.com/app` 后在 HTML 里搜 `unavailable` / `country` / `不可用` 等关键词"来判断可用性。问题很明显：
 
-1. **关键词过于宽泛**：`country`、`region`、`unsupported`、`不可用` 这类词在 Google 的正常页面、i18n 资源、内联 JS 里大量出现，极易**误报**。
-2. **页面是 SPA**：`/app` 的初始 HTML 只是外壳，真正内容靠前端动态加载，关键词命中与否和"地区是否支持"没有稳定关系。
-3. **无法区分"入口可达"和"真的能用"**：该脚本自己也只能输出"入口可达"，实际信息量接近于零。
-4. **架构不同**：它是 Surge 面板脚本（`$httpClient`），只能检测**当前策略**，无法逐节点批量检测。
+1. **关键词过于宽泛**：`country`、`region`、`unsupported`、`不可用` 这类词在 Google 正常页面、i18n 资源、内联 JS 里大量出现，极易误报。
+2. **页面是 SPA**：初始 HTML 只是外壳，真正内容靠前端动态加载，命中与否和"地区是否支持"没有稳定关系。
+3. **无法区分"入口可达"和"真的能用"**：这类脚本自己也只能输出"入口可达"。
+4. **架构不同**：`$httpClient` 面板脚本只能检测**当前策略**，无法逐节点批量检测。
 
-而"解析区域码"是**结构化判定**：Google 会在页面里明确写出识别到的地区码，直接读它即可，准确且能顺带得到落地地区。
+相比之下，"解析区域码"是**结构化判定**：Google 会在页面里明确写出识别到的地区码，直接读它即可，准确且能顺带得到落地地区。
 
-> 注意：区域码法判断的是 **Gemini 网页端在服务端是否对你的出口地区放行**。它不检查登录态、账号资格（如 Google AI Pro 订阅）等信息 —— 这类信息无法在不登录的情况下探测。
+> 注意：区域码法判断的是 **Gemini 网页端在服务端是否对你的出口地区放行**，不检查登录态与账号资格（如 Google AI Pro 订阅）——这类信息无法在不登录的情况下探测。
 
 ---
 
 ## 致谢 / 参考
 
-- 检测方法与不支持地区列表参考 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev)（GPL-3.0）的媒体解锁检测模块
-- Sub-Store 脚本结构参考 [xream/scripts](https://github.com/xream/scripts) 的 `sub-store-scripts/check/`
+- 检测方法与阻断地区列表参考 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 的媒体解锁检测模块
+- GPT 脚本结构与端点参考 [xream/scripts](https://github.com/xream/scripts) 的 `sub-store-scripts/check/gpt.js`
+- 平台检测思路参考 subs-check 系列项目
 
-## License
+## 许可证
 
-MIT
+本仓库脚本的骨架（并发池、重试、缓存写法）衍生自 [xream/scripts](https://github.com/xream/scripts)（**GPL-3.0**），因此本仓库同样以 **GPL-3.0** 发布，全文见 [LICENSE](LICENSE)。
