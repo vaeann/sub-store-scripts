@@ -59,8 +59,10 @@
  * - [reject_dc] 命中 Cloudflare 的 type=dc(机房 IP)即判不可用. 默认 false
  *   实测(2026-09-10, 日本机房节点): 请求 ios.chat.openai.com 返回
  *     {"cf_details":"Request is not allowed. Please try again later.", "type":"dc"}
- *   "dc" = datacenter。它是否等同于"ChatGPT 用不了"取决于 OpenAI 的放行策略,
- *   无法在不登录的情况下断定, 所以默认不参与判定, 只把该信号记录到字段里供你筛选。
+ *   "dc" = datacenter, 只是 OpenAI 对来源类型的标记。
+ *   ✅ 已由实际使用确认: 带 dc 的机房节点 **仍可正常使用 ChatGPT**,
+ *      所以它**不代表不可用**, 默认关闭判定、只把它记录到 _gpt_cf_type 里。
+ *      除非你自己实测发现某些带 dc 的节点确实打不开, 才需要开它。
  *
  * 注: mode=both 时, app 与 web 两次请求各自独立兜底 —— 其中一个超时/报错
  *     不会影响另一个的检测结果。

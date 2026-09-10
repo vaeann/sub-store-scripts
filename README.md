@@ -166,9 +166,10 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 **由此确认的两件事**：
 
 1. **区域码法成立** —— 2026 年的 Gemini 页面里该标记依然存在，位置就在 `AF_initDataCallback` 数据中。
-2. **发现第三种信号 `type: dc`**（datacenter）——机房 IP 会被 OpenAI 标记。**原版 gpt.js 和本脚本的默认判定都不处理它**。它是否等同于"ChatGPT 用不了"取决于 OpenAI 的放行策略，不登录无法断定，所以默认**只记录不判定**；需要按它筛选的可以开 `reject_dc=true`。
+2. **发现第三种信号 `type: dc`**（datacenter）——机房 IP 会被 OpenAI 标记。**原版 gpt.js 忽略它，本脚本默认也只记录不判定**。
+   ✅ **已验证：该标记不影响可用性。** 机房节点虽然返回 `type: dc`，但实际使用 ChatGPT 完全正常。所以默认 `reject_dc=false` 是对的，不需要按它筛选。
 
-> 仍未验证的部分：住宅/家宽节点上该端点返回什么（手上只有机房节点）。若你有家宽节点，切换后对比 `_gpt_cf_type` 即可判断 `dc` 是否可用作"机房不可用"的判据。
+> 对比：**Gemini 侧的同类现象严重得多** —— 部分机房 IP 会被 Gemini *直接拒绝服务*（区域码回落为 `CHN`），见上一节的实测表。同样是"机房 IP 被区别对待"，两边后果完全不同。
 
 ### 模式与标签
 
