@@ -56,6 +56,11 @@
  * - [unusable_prefix] 给不可用节点也加前缀. 默认不加
  * - [reject_vpn] 命中 vpn 关键词即判不可用. 默认 true (与 subs-check 一致)
  *   若发现所有节点都被判为不可用, 把该项设为 false 再试(reject_vpn=false)
+ * - [reject_dc] 命中 Cloudflare 的 type=dc(机房 IP)即判不可用. 默认 false
+ *   实测(2026-09-10, 日本机房节点): 请求 ios.chat.openai.com 返回
+ *     {"cf_details":"Request is not allowed. Please try again later.", "type":"dc"}
+ *   "dc" = datacenter。它是否等同于"ChatGPT 用不了"取决于 OpenAI 的放行策略,
+ *   无法在不登录的情况下断定, 所以默认不参与判定, 只把该信号记录到字段里供你筛选。
  *
  * 注: mode=both 时, app 与 web 两次请求各自独立兜底 —— 其中一个超时/报错
  *     不会影响另一个的检测结果。
@@ -68,7 +73,9 @@
  *   _gpt          App 可用
  *   _gpt_web      Web/API 可用
  *   _gpt_plus     两者都可用
- *   _gpt_status   判定结果: ok / unsupported_country / vpn / http_xxx / app_failed / web_failed / failed / cached_failed
+ *   _gpt_status   判定结果: ok / unsupported_country / vpn / datacenter / http_xxx / app_failed / web_failed / failed / cached_failed
+ *   _gpt_cf_type  Cloudflare 标记的来源类型(如 dc = 机房)。仅 app 端点返回该字段时才有
+ *   _gpt_cf_details  Cloudflare 的原始说明文本
  *   _gpt_latency / _gpt_web_latency  对应延迟
  */
 
@@ -91,6 +98,7 @@ async function operator(proxies = [], targetPlatform, context) {
   const gptPlusPrefix = $arguments.gpt_plus_prefix ?? '[GPT⁺] '
   const unusablePrefix = $arguments.unusable_prefix
   const rejectVpn = bool($arguments.reject_vpn, true)
+  const rejectDc = bool($arguments.reject_dc, false)
   const keepOnlyOk = bool($arguments.keep_only_ok, false)
   const method = $arguments.method || 'get'
 
@@ -186,6 +194,10 @@ async function operator(proxies = [], targetPlatform, context) {
           const judged = judge(res)
           appOk = judged.ok
           if (!judged.ok && !reason) reason = judged.status
+          if (judged.cf && judged.cf.type) {
+            proxy._gpt_cf_type = judged.cf.type
+            if (judged.cf.details) proxy._gpt_cf_details = judged.cf.details
+          }
           $.info(
             `[${proxy.name}] [app] http: ${statusOf(res)}, result: ${judged.status}, latency: ${appLatency}`
           )
@@ -278,7 +290,26 @@ async function operator(proxies = [], targetPlatform, context) {
     const lower = raw.toLowerCase()
     if (lower.indexOf('unsupported_country') > -1) return { ok: false, status: 'unsupported_country' }
     if (rejectVpn && lower.indexOf('vpn') > -1) return { ok: false, status: 'vpn' }
-    return { ok: true, status: 'ok' }
+    const cf = extractCf(raw)
+    if (rejectDc && cf.type && cf.type.toLowerCase() === 'dc') {
+      return { ok: false, status: 'datacenter', cf }
+    }
+    return { ok: true, status: 'ok', cf }
+  }
+
+  // 从响应体里提取 Cloudflare 的 cf_details / type
+  // OpenAI 用它标记来源类型, 机房 IP 会返回 {"cf_details":"...","type":"dc"}
+  function extractCf(raw) {
+    let body = raw
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body)
+      } catch (e) {
+        return {}
+      }
+    }
+    if (!body || typeof body !== 'object') return {}
+    return { type: body.type, details: body.cf_details }
   }
 
   function statusOf(res) {

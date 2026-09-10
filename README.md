@@ -124,7 +124,23 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 
 - **如果所有节点都被判为不可用**，先试 `reject_vpn=false`（`vpn` 关键词匹配是保守策略）。
 - `mode=both` 时 App 与 Web 两次请求**各自独立兜底**：其中一个超时/报错不会影响另一个的检测结果。
-- **两个脚本都未做过端到端实跑**：判定逻辑来自上游源码对齐 + 本地单元验证，开发机在墙内无法直连 Google / OpenAI。首次使用建议先小范围试跑、看下日志再全量应用。
+
+### 实测记录（2026-09-10，借手机 Surge 共享代理出网，日本节点）
+
+三个端点全部抓到了真实响应，脚本里的函数直接跑通：
+
+| 端点 | 真实响应 | 脚本判定 |
+| --- | --- | --- |
+| `gemini.google.com` | 837KB 页面，含 `,2,1,200,"JPN",null,null,"269","658",1,n` | 提取区域码 `JPN` → `ok` ✅ |
+| `ios.chat.openai.com` | `403` + `{"cf_details":"Request is not allowed. Please try again later.", "type":"dc"}` | `ok` ✅，并记录 `_gpt_cf_type=dc` |
+| `api.openai.com/compliance/cookie_requirements` | `200` + `{"cookie_consent_required":false}` | `ok` ✅ |
+
+**由此确认的两件事**：
+
+1. **区域码法成立** —— 2026 年的 Gemini 页面里该标记依然存在，位置就在 `AF_initDataCallback` 数据中。
+2. **发现第三种信号 `type: dc`**（datacenter）——机房 IP 会被 OpenAI 标记。**原版 gpt.js 和本脚本的默认判定都不处理它**。它是否等同于"ChatGPT 用不了"取决于 OpenAI 的放行策略，不登录无法断定，所以默认**只记录不判定**；需要按它筛选的可以开 `reject_dc=true`。
+
+> 仍未验证的部分：住宅/家宽节点上该端点返回什么（手上只有机房节点）。若你有家宽节点，切换后对比 `_gpt_cf_type` 即可判断 `dc` 是否可用作"机房不可用"的判据。
 
 ### 模式与标签
 
@@ -149,6 +165,7 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 | `gpt_plus_prefix` | `[GPT⁺] ` | 两者都可用前缀 |
 | `unusable_prefix` | — | 给不可用节点加前缀 |
 | `reject_vpn` | `true` | 命中 `vpn` 关键词即判不可用 |
+| `reject_dc` | `false` | 命中 CF 的 `type=dc`（机房 IP）即判不可用 |
 | `keep_only_ok` | `false` | 只保留可用节点 |
 | `include_unsupported_proxy` / `cache` / `disable_failed_cache` | 同上 | — |
 
@@ -159,7 +176,9 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 | `_gpt` | App 可用 |
 | `_gpt_web` | Web 可用 |
 | `_gpt_plus` | 两者都可用 |
-| `_gpt_status` | `ok` / `unsupported_country` / `vpn` / `http_xxx` / `failed` / `cached_failed` |
+| `_gpt_status` | `ok` / `unsupported_country` / `vpn` / `datacenter` / `http_xxx` / `app_failed` / `web_failed` / `failed` / `cached_failed` |
+| `_gpt_cf_type` | CF 标记的来源类型（如 `dc` = 机房）。仅 app 端点返回该字段时才有 |
+| `_gpt_cf_details` | CF 的原始说明文本 |
 | `_gpt_latency` / `_gpt_web_latency` | 对应延迟 |
 
 ---
