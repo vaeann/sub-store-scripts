@@ -55,6 +55,14 @@
  *   _gemini_sampled  实际采样次数
  *   _gemini_raw      每次采样看到的原始值(区域码优先), 逗号分隔, 用于排查抖动
  *
+ * 关于缓存: 开启 cache 后, 命中缓存的节点不会发起任何请求(秒回)。
+ *   每次运行结束会输出一行统计, 用于确认缓存是否生效:
+ *     [gemini] 完成: 共 80 个节点 | 命中成功缓存 73, 命中失败缓存 7, 实际检测 0
+ *   ⚠️ 若"实际检测"一直等于节点总数, 说明缓存没生效 —— 检查 cache 参数与 Sub-Store 的缓存时长设置。
+ *   ⚠️ disable_failed_cache=true 会让失败节点每次都重新检测, 缓存只能省一半。
+ *   ⚠️ 在 Sub-Store 里建议配合「定时处理订阅」(produce) 使用, 让缓存始终是热的,
+ *      否则 Surge 拉订阅时仍可能超时(报 -1001)。
+ *
  * 关于缓存时长: 若在对应的脚本中使用参数(⚠ 别忘了这个, 一般为 cache, 值设为 true 即可)开启缓存,
  * 可在 Sub-Store 前端(>=2.16.0) 配置各项缓存的默认时长。
  * 也可以在脚本前面添加一个脚本操作(operator2), 保留 1 小时缓存:
@@ -96,6 +104,9 @@ async function operator(proxies = [], targetPlatform, context) {
   const target = isLoon ? 'Loon' : isEgern ? 'Egern' : isSurge ? 'Surge' : undefined
   const concurrency = parseInt($arguments.concurrency || 10)
 
+  // 运行统计: 便于在日志里一眼看出本轮是否命中缓存（命中即秒回, 不发起任何请求）
+  const stat = { cachedOk: 0, cachedFail: 0, tested: 0 }
+
   // Gemini 不支持的地区(ISO 3166-1 alpha-3), 与 clash-verge-rev 保持一致
   const BLOCKED_CODES = ['CHN', 'RUS', 'BLR', 'CUB', 'IRN', 'PRK', 'SYR', 'HKG', 'MAC']
   // 页面中区域码的定位标记: 标记之后紧跟 3 位大写区域码
@@ -104,6 +115,12 @@ async function operator(proxies = [], targetPlatform, context) {
   await executeAsyncTasks(
     proxies.map(proxy => () => check(proxy)),
     { concurrency }
+  )
+
+  $.info(
+    cacheEnabled
+      ? `[gemini] 完成: 共 ${proxies.length} 个节点 | 命中成功缓存 ${stat.cachedOk}, 命中失败缓存 ${stat.cachedFail}, 实际检测 ${stat.tested}`
+      : `[gemini] 完成: 共 ${proxies.length} 个节点 | 未开启 cache, 实际检测 ${stat.tested}`
   )
 
   if (keepOnlyOk) return proxies.filter(p => p._gemini)
@@ -145,6 +162,7 @@ async function operator(proxies = [], targetPlatform, context) {
             if (cached.gemini_sampled) proxy._gemini_sampled = cached.gemini_sampled
             if (cached.gemini_raw) proxy._gemini_raw = cached.gemini_raw
             $.info(`[${proxy.name}] 使用成功缓存`)
+            stat.cachedOk++
             return
           } else if (disableFailedCache) {
             $.info(`[${proxy.name}] 不使用失败缓存`)
@@ -153,10 +171,13 @@ async function operator(proxies = [], targetPlatform, context) {
             proxy._gemini_status = 'cached_failed'
             if (unavailablePrefix) proxy.name = `${unavailablePrefix}${proxy.name}`
             $.info(`[${proxy.name}] 使用失败缓存`)
+            stat.cachedFail++
             return
           }
         }
       }
+
+      stat.tested++
 
       // ⓪ 轻量预检: 先花约 0.3s / 0KB 确认这个节点能到 Google。
       //    不通就直接判死, 不再下载 141KB 整页 —— 死节点会一直挂到超时, 是耗时的主要来源。
