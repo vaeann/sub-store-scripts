@@ -20,12 +20,20 @@
  * - [retries] 重试次数 默认 1
  * - [retry_delay] 重试延时(单位: 毫秒) 默认 1000
  * - [concurrency] 并发数 默认 10
- * - [samples] 每个节点的采样次数, 取多数票. 默认 3
- *   ⚠️ 实测该判定存在约 1/6 的偶发抖动(同一节点偶尔给出别的区域码),
- *      单次采样会产生假阴性。默认 3 次投票; 一旦形成多数票会提前结束, 通常只发 2 次请求。
- *      设 samples=1 可回到单次采样的轻量模式。
- *      ⚠️ 请用奇数(3 / 5)。偶数(如 2)在平票时没有优势 —— 实测 samples=2 的假阴性率与 1 次相同。
- *      按实测抖动率 1/8 模拟: samples=1 -> 12.4% / 3 -> 4.3% / 5 -> 1.6%
+ * - [samples] 非 ok 时的最大采样次数, 取多数票. 默认 3
+ *   ⚠️ 实测该判定存在约 1/8 的偶发抖动(同一节点偶尔给出别的区域码), 单次采样会产生假阴性。
+ *      除首次外, 每个采样都要"再确认一次"才下结论, 因此比单次采样准得多。
+ *      按抖动率 1/8 模拟(开启 early_exit_ok): samples=3 -> 假阴性 2.9% / 5 -> 1.0%
+ *      平均只需 1.2~1.4 次整页请求(旧版固定 2.2 次)。
+ *      设 samples=1 可回到单次采样的轻量模式(假阴性 12.5%, 不推荐)。
+ * - [early_exit_ok] 首次采样就 ok 时立即停止采样. 默认 true
+ *   依据: 实测抖动只会把"可用节点"偶尔判成 blocked(假阴性), 从未把"不可用节点"判成 ok,
+ *   所以首次即为 ok 时可以立即定论。首次不是 ok 则继续采样, 避免单次抖动误杀节点。
+ * - [probe_url] 轻量预检地址, 默认 https://www.google.com/generate_204 (响应约 0KB)。
+ *   预检"连 Google 都不通"或"命中 Google 人机验证页"时, 直接判为不可用,
+ *   跳过 141KB 的整页下载 —— 这是耗时与超时的主要来源。设为 off 可关闭预检。
+ * - [probe_timeout] 预检超时(毫秒). 默认 3000
+ * - [probe_retries] 预检重试次数. 默认 0 (预检快, 失败即判)
  * - [method] 请求方法. 默认 get
  * - [url] 检测地址. 默认 https://gemini.google.com (在 URL query 中传参需要 encodeURIComponent)
  * - [ua] 请求头 User-Agent. 默认 macOS Chrome (与上游一致)
@@ -39,7 +47,9 @@
  *
  * 注: 节点上总是会添加以下字段, 可用于脚本筛选
  *   _gemini          true / false   是否可用
- *   _gemini_status   ok / blocked / unknown / failed / cached_failed
+ *   _gemini_status   ok / blocked / unknown / unreachable / captcha / failed / cached_failed
+ *                    unreachable => 预检不通(节点连 Google 都连不上)
+ *                    captcha     => 预检命中 Google 人机验证页(该出口被 Google 限流)
  *   _gemini_region   区域码(能识别到时才有), 如 USA
  *   _gemini_latency  响应延迟(ms, 仅实际请求时)
  *   _gemini_sampled  实际采样次数
@@ -70,6 +80,14 @@ async function operator(proxies = [], targetPlatform, context) {
   const keepOnlyOk = bool($arguments.keep_only_ok, false)
   const method = $arguments.method || 'get'
   const samples = Math.max(1, parseInt($arguments.samples || 3) || 3)
+  const earlyExitOk = bool($arguments.early_exit_ok, true)
+  const probeRaw = $arguments.probe_url
+  const probeUrl =
+    probeRaw !== undefined && /^(off|false|no|0)$/i.test(String(probeRaw).trim())
+      ? undefined
+      : decode(probeRaw || 'https://www.google.com/generate_204')
+  const probeTimeout = parseFloat($arguments.probe_timeout || 3000)
+  const probeRetries = parseFloat($arguments.probe_retries ?? 0)
   const url = decode($arguments.url || 'https://gemini.google.com')
   const ua = decode(
     $arguments.ua ||
@@ -140,6 +158,43 @@ async function operator(proxies = [], targetPlatform, context) {
         }
       }
 
+      // ⓪ 轻量预检: 先花约 0.3s / 0KB 确认这个节点能到 Google。
+      //    不通就直接判死, 不再下载 141KB 整页 —— 死节点会一直挂到超时, 是耗时的主要来源。
+      if (probeUrl) {
+        let probeStatus = 0
+        let probeBody = ''
+        try {
+          const pRes = await http({
+            method: 'get',
+            headers: {
+              'User-Agent': ua,
+            },
+            url: probeUrl,
+            timeout: probeTimeout,
+            retries: probeRetries,
+            'policy-descriptor': node,
+            node,
+          })
+          probeStatus = parseInt(pRes.status ?? pRes.statusCode ?? 0) || 0
+          probeBody = String(pRes.body ?? pRes.rawBody ?? '')
+        } catch (e) {
+          probeStatus = 0
+        }
+        const captcha = /google\.[a-z.]+\/sorry|unusual traffic/i.test(probeBody)
+        const unreachable = probeStatus === 0 || probeStatus >= 400
+        $.info(
+          `[${proxy.name}] 预检: http ${probeStatus}${captcha ? ' (命中 Google 人机验证页)' : ''}`
+        )
+        if (unreachable || captcha) {
+          proxy._gemini = false
+          proxy._gemini_status = captcha ? 'captcha' : 'unreachable'
+          proxy._gemini_sampled = 0
+          if (unavailablePrefix) proxy.name = `${unavailablePrefix}${proxy.name}`
+          if (cacheEnabled) cache.set(id, {})
+          return
+        }
+      }
+
       // 请求（多次采样取多数票：该判定存在约 1/6 的偶发抖动，单次采样会产生假阴性）
       const statuses = []
       const regions = []
@@ -176,6 +231,10 @@ async function operator(proxies = [], targetPlatform, context) {
         $.info(
           `[${proxy.name}] 采样 ${i + 1}/${samples}: http: ${lastStatus}, region: ${region || '-'}, result: ${s}, latency: ${latency}`
         )
+
+        // 首次采样就得到 ok 则立即定论: 实测抖动只会让可用节点偶尔变 blocked(假阴性),
+        // 不会把不可用节点误判成 ok。若首次不是 ok, 则必须继续采样 —— 否则单次抖动就会误杀节点。
+        if (earlyExitOk && i === 0 && s === 'ok') break
 
         // 已经形成多数票就不必再采（samples=3 时通常在 2 次后结束）
         if (i + 1 < samples && topOf(statuses).count >= Math.ceil(samples / 2)) break

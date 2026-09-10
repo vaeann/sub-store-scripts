@@ -63,7 +63,11 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 | `retry_delay` | `1000` | 重试延时（毫秒） |
 | `concurrency` | `10` | 并发数 |
 | `method` | `get` | 请求方法 |
-| `samples` | `3` | 每个节点采样次数，取多数票（**建议奇数 3/5**，偶数无优势）|
+| `samples` | `3` | 非 ok 时的最大采样次数，取多数票（**建议奇数 3/5**，偶数无优势）|
+| `early_exit_ok` | `true` | 首次采样即 ok 就停止（省一半流量）。首次不是 ok 则继续采样，避免抖动误杀 |
+| `probe_url` | `https://www.google.com/generate_204` | 轻量预检地址（响应约 0KB）。预检失败或命中 Google 人机验证页就直接判死，跳过整页下载。设 `off` 关闭 |
+| `probe_timeout` | `3000` | 预检超时（毫秒）|
+| `probe_retries` | `0` | 预检重试次数 |
 | `url` | `https://gemini.google.com` | 检测地址 |
 | `ua` | macOS Chrome | User-Agent（与上游一致） |
 | `gemini_prefix` | `[Gemini] ` | 可用节点前缀 |
@@ -79,11 +83,36 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 | 字段 | 说明 |
 | --- | --- |
 | `_gemini` | `true` / `false` 是否可用 |
-| `_gemini_status` | `ok` / `blocked` / `unknown` / `failed` / `cached_failed` |
+| `_gemini_status` | `ok` / `blocked` / `unknown` / `unreachable` / `captcha` / `failed` / `cached_failed`（`unreachable` = 预检不通；`captcha` = 出口被 Google 限流，返回人机验证页）|
 | `_gemini_region` | 区域码（识别到才有），如 `USA` |
 | `_gemini_latency` | 延迟（ms） |
 | `_gemini_sampled` | 实际采样次数 |
 | `_gemini_raw` | 每次采样看到的原始值（区域码优先），逗号分隔，用于排查抖动 |
+
+---
+
+### 性能：为什么它不再容易超时
+
+Gemini 的判定必须下载**整页约 141KB（gzip 后）**，区域码标记位于页面 **94% 处**，服务器还会忽略 `Range` 请求（实测：请求前 60KB 仍返回全量），所以**没法只取一小段**。早期版本在此基础上每个节点还要采样 2~3 次 → 单节点 280~420KB，死节点还会一路挂到超时。
+
+两处优化（默认开启）：
+
+| 优化 | 做法 | 效果 |
+| --- | --- | --- |
+| **轻量预检** | 先请求 `www.google.com/generate_204`（约 0KB）。连 Google 都不通、或命中 Google 人机验证页（`/sorry/`）的节点，直接判死，**不再下载整页** | 死节点/被限流节点从「141KB × 2~3 次、每次挂满超时」降到「1 次约 0KB、约 3 秒」 |
+| **`early_exit_ok`** | 首次采样即 ok 就定论；首次不是 ok 才继续采样 | 可用节点只需 **1 次**整页请求 |
+
+按实测抖动率 1/8 模拟（40 可用 / 7 被封 / 3 死节点）：
+
+| 方案 | 假阴性率 | 平均每节点整页请求 | 平均流量 |
+| --- | --- | --- | --- |
+| 旧版 `samples=3` | 4.29% | 2.22 次 | 约 313KB |
+| **新版 `samples=3`** | **2.93%** | **1.23 次** | **约 173KB** |
+| 新版 `samples=5` | 0.97% | 1.41 次 | 约 199KB |
+
+**新版同时做到了更快和更准** —— 因为"首次不是 ok 就必须再确认一次"，等于对每个可疑结果都做了复核。所以现在**推荐 `samples=5`**：比旧版的 `samples=3` 更准（0.97% vs 4.29%），请求数还更少。
+
+> 实测依据：本机采样中，同一节点多次请求会命中**不同的出口 IP**（同一节点同时测到 `103.172.182.27` / `103.151.172.93` / IPv6 三个地址），这正是抖动的来源——轮换出口的节点，不同出口被 Google 判定的地区可能不同。
 
 ---
 
@@ -105,7 +134,8 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 
 **三条结论**：
 
-1. **单次采样有约 1/8 的偶发抖动**（同一节点偶尔给出别的区域码），会产生假阴性。所以脚本默认 `samples=3` 取多数票：假阴性率从 12.4% 降到 4.3%（`samples=5` 为 1.6%）。
+1. **单次采样有约 1/8 的偶发抖动**（同一节点偶尔给出别的区域码），会产生假阴性。
+   → 因此脚本默认 `samples=3` 并对可疑结果复核；开启 `early_exit_ok` 后：`samples=3` 假阴性 **2.9%**、`samples=5` 为 **1.0%**（单次采样是 12.5%）。
 2. **多个机房 / VPN 供应商的 IP 段会被 Gemini 拒绝服务，区域码回落为 `CHN`**。注意这**不代表 Google 认为你在国内**——同一 IP 下 Google 主站完全正常。这类节点"标称地区"看着没问题（英国、阿根廷、土耳其、加拿大），**实际用不了 Gemini**。
    → 所以**判断 Gemini 可用性不能看节点标称地区，只能实测**。
 3. 顺带一个排查坑：`chat.openai.com/cdn-cgi/trace` 这类探针会因为 **HTTP 连接复用**而滞后——切到香港节点后，它的出口 IP 还显示上一个日本节点。**要判断节点身份，只认 Gemini 的区域码。**
