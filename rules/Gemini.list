@@ -1,0 +1,56 @@
+# NAME: Gemini
+# AUTHOR: vaeann
+# REPO: https://github.com/vaeann/sub-store-scripts
+# UPDATED: 2026-09-10
+#
+# 用途: 把 Gemini 相关流量单独分流到一个"落在支持地区"的策略组
+# 用法: RULE-SET,https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/rules/Gemini.list,Gemini
+#
+# ⚠️ 必须放在 Google 规则【之前】
+#    blackmatrix7 的 Google.list 含 DOMAIN-SUFFIX,google.com 与 googleapis.com，
+#    会把 gemini.google.com / generativelanguage.googleapis.com 一并命中；
+#    Surge 规则是"自上而下、命中即停"，写在前面才能抢到。
+#
+# 参考来源:
+#   - https://github.com/blackmatrix7/ios_rule_script  (rule/Surge/Gemini/Gemini.list, GPL-2.0)
+#   - https://github.com/EAlyce/conf                   (Rule/OpenAI.list, MIT)
+# 说明: 上游那份最后更新于 2025-06，缺少 AI Studio / NotebookLM / Jules 等域名；
+#       本文件做了补全与精简（去掉过宽条目），不是逐行复制。
+
+# ── Gemini 本体 ────────────────────────────────────────────
+DOMAIN-SUFFIX,gemini.google
+DOMAIN-SUFFIX,gemini.google.com
+DOMAIN-SUFFIX,bard.google.com
+DOMAIN-SUFFIX,generativeai.google
+DOMAIN-SUFFIX,generativelanguage.googleapis.com
+DOMAIN-SUFFIX,proactivebackend-pa.googleapis.com
+DOMAIN,alkalimakersuite-pa.clients6.google.com
+DOMAIN,ai.google.dev
+
+# ── 相关 Google AI 产品 ────────────────────────────────────
+# AI Studio / NotebookLM / Jules / Code Assist / DeepMind
+DOMAIN-SUFFIX,aistudio.google.com
+DOMAIN-SUFFIX,makersuite.google.com
+DOMAIN-SUFFIX,notebooklm.google
+DOMAIN-SUFFIX,notebooklm.google.com
+DOMAIN-SUFFIX,jules.google.com
+DOMAIN-SUFFIX,cloudcode-pa.googleapis.com
+DOMAIN-SUFFIX,daily-cloudcode-pa.googleapis.com
+DOMAIN,alkalicore-pa.clients6.google.com
+DOMAIN-SUFFIX,deepmind.com
+DOMAIN-SUFFIX,deepmind.google
+
+# ── 可选：默认不启用 ───────────────────────────────────────
+# 以下条目偏宽或用途不确定，启用后会把"非 Gemini"的 Google 流量也拉进 Gemini 策略组。
+# 只有当出现"某个 Google AI 功能不通"时，再逐条取消注释排查。
+#
+# DOMAIN-SUFFIX,apis.google.com
+# DOMAIN-KEYWORD,generativelanguage
+# DOMAIN-KEYWORD,colab
+# DOMAIN-KEYWORD,developerprofiles
+# DOMAIN,aisandbox-pa.googleapis.com
+# DOMAIN-SUFFIX,aida.googleapis.com
+# DOMAIN-SUFFIX,robinfrontend-pa.googleapis.com
+# DOMAIN-SUFFIX,geller-pa.googleapis.com
+# DOMAIN-SUFFIX,antigravity.google
+# DOMAIN-SUFFIX,antigravity-unleash.goog

@@ -10,6 +10,8 @@ Surge / Loon / Egern 用的 **Sub-Store 节点检测脚本**，逐个节点检�
 
 前两者结构一致，可**串在同一个订阅上**，得到 `[GPT⁺] [Gemini] 香港01` 这样的名称；第三个是 Surge 面板脚本，与订阅处理无关。
 
+另外附一份自建的 [**Gemini 分流规则**](rules/Gemini.list)，配合 Surge 的 `RULE-SET` 使用，见下文。
+
 ---
 
 ## 用法
@@ -427,6 +429,45 @@ https://airport.com/sub?token=abc&flag=clash
 ### ⚠️ 许可证
 
 上游 `cc63/Surge` **未声明许可证**（license 字段为 null），本文件属于其修改版，**仅用于自用**，请不要再次分发或公开发布。
+
+---
+
+## rules/Gemini.list — Gemini 分流规则（自建）
+
+把 Gemini 相关流量单独分流到一个"落在支持地区"的策略组。
+
+```ini
+RULE-SET,https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/rules/Gemini.list,Gemini
+RULE-SET,https://raw.githubusercontent.com/EAlyce/conf/main/Rule/OpenAI.list,AI
+RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Google/Google.list,Google
+```
+
+### ⚠️ 为什么必须排在 Google 规则之前
+
+`blackmatrix7` 的 Google.list 里有：
+
+```
+DOMAIN-SUFFIX,google.com        ← 会把 gemini.google.com 一并命中
+DOMAIN-SUFFIX,googleapis.com    ← 会把 generativelanguage.googleapis.com 一并命中
+```
+
+Surge 规则是**自上而下、命中即停**。Google 规则写在前，Gemini 就直接走了 Google 策略组——如果你那个组选的是香港节点，就会出现"google.com 通、Gemini 报 HKG 不可用"的怪现象。
+
+### 相比上游改了什么
+
+上游 `blackmatrix7/ios_rule_script` 的 Gemini.list **最后更新于 2025-06**，只有 13 条且缺 AI Studio / NotebookLM / Jules 等域名。
+
+| 改动 | 说明 |
+| --- | --- |
+| **去掉 3 条过宽条目** | `DOMAIN-SUFFIX,apis.google.com`、`DOMAIN-KEYWORD,colab`、`DOMAIN-KEYWORD,developerprofiles` —— 会把非 Gemini 的 Google 流量一起拉进来；已改为**注释形式保留**，需要时取消注释 |
+| **补全缺失域名** | `aistudio.google.com`、`notebooklm.google(.com)`、`jules.google.com`、`cloudcode-pa.googleapis.com`、`gemini.google`（`.google` 顶级域，与 `.google.com` 是两个不同规则）等 |
+| **不用宽通配** | 不使用 `googleapis.com` / `clients6.google.com` 这类通配，只用具体主机 |
+
+共 **18 条有效规则**（15 条 DOMAIN-SUFFIX + 3 条 DOMAIN），另有 10 条偏宽/用途不确定的条目以注释保留，出现"某个 Google AI 功能不通"时可逐条放开排查。
+
+> 这份列表本质是"域名白名单"，Google 推出新 AI 产品时才需要更新（比如 aistudio、notebooklm、jules 都是后来加的），平时**不用频繁维护**。
+>
+> 规则汇编参考了 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)（GPL-2.0）与 [EAlyce/conf](https://github.com/EAlyce/conf)（MIT）。
 
 ---
 
