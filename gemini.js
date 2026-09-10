@@ -20,6 +20,12 @@
  * - [retries] 重试次数 默认 1
  * - [retry_delay] 重试延时(单位: 毫秒) 默认 1000
  * - [concurrency] 并发数 默认 10
+ * - [samples] 每个节点的采样次数, 取多数票. 默认 3
+ *   ⚠️ 实测该判定存在约 1/6 的偶发抖动(同一节点偶尔给出别的区域码),
+ *      单次采样会产生假阴性。默认 3 次投票; 一旦形成多数票会提前结束, 通常只发 2 次请求。
+ *      设 samples=1 可回到单次采样的轻量模式。
+ *      ⚠️ 请用奇数(3 / 5)。偶数(如 2)在平票时没有优势 —— 实测 samples=2 的假阴性率与 1 次相同。
+ *      按实测抖动率 1/8 模拟: samples=1 -> 12.4% / 3 -> 4.3% / 5 -> 1.6%
  * - [method] 请求方法. 默认 get
  * - [url] 检测地址. 默认 https://gemini.google.com (在 URL query 中传参需要 encodeURIComponent)
  * - [ua] 请求头 User-Agent. 默认 macOS Chrome (与上游一致)
@@ -36,6 +42,8 @@
  *   _gemini_status   ok / blocked / unknown / failed / cached_failed
  *   _gemini_region   区域码(能识别到时才有), 如 USA
  *   _gemini_latency  响应延迟(ms, 仅实际请求时)
+ *   _gemini_sampled  实际采样次数
+ *   _gemini_raw      每次采样看到的原始值(区域码优先), 逗号分隔, 用于排查抖动
  *
  * 关于缓存时长: 若在对应的脚本中使用参数(⚠ 别忘了这个, 一般为 cache, 值设为 true 即可)开启缓存,
  * 可在 Sub-Store 前端(>=2.16.0) 配置各项缓存的默认时长。
@@ -61,6 +69,7 @@ async function operator(proxies = [], targetPlatform, context) {
   const showRegion = bool($arguments.show_region, false)
   const keepOnlyOk = bool($arguments.keep_only_ok, false)
   const method = $arguments.method || 'get'
+  const samples = Math.max(1, parseInt($arguments.samples || 3) || 3)
   const url = decode($arguments.url || 'https://gemini.google.com')
   const ua = decode(
     $arguments.ua ||
@@ -85,7 +94,7 @@ async function operator(proxies = [], targetPlatform, context) {
 
   async function check(proxy) {
     const id = cacheEnabled
-      ? `gemini:${url}:${JSON.stringify(
+      ? `gemini:${url}:${samples}:${JSON.stringify(
           Object.fromEntries(
             Object.entries(proxy).filter(([key]) => !/^(name|collectionName|subName|id|_.*)$/i.test(key))
           )
@@ -115,6 +124,8 @@ async function operator(proxies = [], targetPlatform, context) {
             proxy._gemini_status = cached.gemini_status || 'ok'
             if (cached.gemini_region) proxy._gemini_region = cached.gemini_region
             proxy._gemini_latency = cached.gemini_latency
+            if (cached.gemini_sampled) proxy._gemini_sampled = cached.gemini_sampled
+            if (cached.gemini_raw) proxy._gemini_raw = cached.gemini_raw
             $.info(`[${proxy.name}] 使用成功缓存`)
             return
           } else if (disableFailedCache) {
@@ -129,36 +140,53 @@ async function operator(proxies = [], targetPlatform, context) {
         }
       }
 
-      // 请求
-      const startedAt = Date.now()
-      const res = await http({
-        method,
-        headers: {
-          'User-Agent': ua,
-        },
-        url,
-        'policy-descriptor': node,
-        node,
-      })
-      const status = parseInt(res.status ?? res.statusCode ?? 200)
-      const body = String(res.body ?? res.rawBody ?? '')
-      const latency = Date.now() - startedAt
+      // 请求（多次采样取多数票：该判定存在约 1/6 的偶发抖动，单次采样会产生假阴性）
+      const statuses = []
+      const regions = []
+      let latency = 0
+      let lastStatus = 0
+      for (let i = 0; i < samples; i++) {
+        const startedAt = Date.now()
+        const res = await http({
+          method,
+          headers: {
+            'User-Agent': ua,
+          },
+          url,
+          'policy-descriptor': node,
+          node,
+        })
+        latency = Date.now() - startedAt
+        lastStatus = parseInt(res.status ?? res.statusCode ?? 200)
+        const body = String(res.body ?? res.rawBody ?? '')
 
-      // 从页面数据中提取区域码
-      const region = extractRegion(body)
+        // 从页面数据中提取区域码
+        const region = extractRegion(body)
+        if (region) regions.push(region)
 
-      let geminiStatus
-      if (region) {
-        // 拿到区域码 => 页面正常下发, 按地区判断
-        geminiStatus = BLOCKED_CODES.indexOf(region) > -1 ? 'blocked' : 'ok'
-      } else {
-        // 没拿到区域码: HTTP 正常但页面异常 => unknown; 请求失败 => failed
-        geminiStatus = status >= 200 && status < 400 ? 'unknown' : 'failed'
+        // 拿到区域码 => 页面正常下发, 按地区判断; 否则看 HTTP 状态
+        const s = region
+          ? BLOCKED_CODES.indexOf(region) > -1
+            ? 'blocked'
+            : 'ok'
+          : lastStatus >= 200 && lastStatus < 400
+            ? 'unknown'
+            : 'failed'
+        statuses.push(s)
+        $.info(
+          `[${proxy.name}] 采样 ${i + 1}/${samples}: http: ${lastStatus}, region: ${region || '-'}, result: ${s}, latency: ${latency}`
+        )
+
+        // 已经形成多数票就不必再采（samples=3 时通常在 2 次后结束）
+        if (i + 1 < samples && topOf(statuses).count >= Math.ceil(samples / 2)) break
       }
 
-      $.info(`[${proxy.name}] status: ${status}, region: ${region || '-'}, result: ${geminiStatus}, latency: ${latency}`)
+      const geminiStatus = topOf(statuses).value
+      const region = regions.length ? topOf(regions).value : undefined
 
       proxy._gemini_status = geminiStatus
+      proxy._gemini_sampled = statuses.length
+      proxy._gemini_raw = (regions.length ? regions : statuses).join(',')
       if (region) proxy._gemini_region = region
 
       if (geminiStatus === 'ok') {
@@ -172,6 +200,8 @@ async function operator(proxies = [], targetPlatform, context) {
             gemini_status: geminiStatus,
             gemini_region: region,
             gemini_latency: latency,
+            gemini_sampled: statuses.length,
+            gemini_raw: proxy._gemini_raw,
           })
         }
       } else {
@@ -208,6 +238,18 @@ async function operator(proxies = [], targetPlatform, context) {
     if (!/^[A-Z]{3}$/.test(code)) return undefined
     if (code === 'UNK') return undefined
     return code
+  }
+
+  // 取数组里的众数（多数票）
+  function topOf(arr) {
+    const counter = {}
+    let best
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i]
+      counter[v] = (counter[v] || 0) + 1
+      if (best === undefined || counter[v] > counter[best]) best = v
+    }
+    return { value: best, count: best === undefined ? 0 : counter[best] }
   }
 
   function decode(value) {

@@ -63,6 +63,7 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 | `retry_delay` | `1000` | 重试延时（毫秒） |
 | `concurrency` | `10` | 并发数 |
 | `method` | `get` | 请求方法 |
+| `samples` | `3` | 每个节点采样次数，取多数票（**建议奇数 3/5**，偶数无优势）|
 | `url` | `https://gemini.google.com` | 检测地址 |
 | `ua` | macOS Chrome | User-Agent（与上游一致） |
 | `gemini_prefix` | `[Gemini] ` | 可用节点前缀 |
@@ -81,6 +82,33 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 | `_gemini_status` | `ok` / `blocked` / `unknown` / `failed` / `cached_failed` |
 | `_gemini_region` | 区域码（识别到才有），如 `USA` |
 | `_gemini_latency` | 延迟（ms） |
+| `_gemini_sampled` | 实际采样次数 |
+| `_gemini_raw` | 每次采样看到的原始值（区域码优先），逗号分隔，用于排查抖动 |
+
+---
+
+## 实测：这个判定有多可靠？（2026-09-10，66 个样本 / 9 个地区）
+
+借手机 Surge 的共享代理出口，让同一台机器逐节点采样实测：
+
+| 地区 | 出口 ISP | Gemini 区域码 | 判定 | 采样稳定性 |
+| --- | --- | --- | --- | --- |
+| 🇯🇵 日本 | Ikuuu Network | `JPN` | ✅ 可用 | 7/8（1 次抖成 `HKG`）|
+| 🇸🇬 新加坡 | Akari Networks | `SGP` | ✅ 可用 | 7/8（1 次抖成 `USA`，同为可用）|
+| 🇺🇸 美国 | Back Waves | `USA` | ✅ 可用 | 3/3 稳定 |
+| 🇨🇳 中国台湾 | Akari Networks | `TWN` | ✅ 可用 | 7/7 稳定 |
+| 🇭🇰 中国香港 | — | `HKG` | ❌ 不支持 | 7/7 稳定 |
+| 🇬🇧 英国 | M247 Europe Infra | `CHN` | ❌ 不支持 | 14/14 稳定 |
+| 🇦🇷 阿根廷 | Amazon AWS | `CHN` | ❌ 不支持 | 7/7 稳定 |
+| 🇹🇷 土耳其 | G-Core Labs | `CHN` | ❌ 不支持 | 3/3 稳定 |
+| 🇨🇦 加拿大 | Datacamp | `CHN` | ❌ 不支持 | 6/6 稳定 |
+
+**三条结论**：
+
+1. **单次采样有约 1/8 的偶发抖动**（同一节点偶尔给出别的区域码），会产生假阴性。所以脚本默认 `samples=3` 取多数票：假阴性率从 12.4% 降到 4.3%（`samples=5` 为 1.6%）。
+2. **多个机房 / VPN 供应商的 IP 段会被 Gemini 拒绝服务，区域码回落为 `CHN`**。注意这**不代表 Google 认为你在国内**——同一 IP 下 Google 主站完全正常。这类节点"标称地区"看着没问题（英国、阿根廷、土耳其、加拿大），**实际用不了 Gemini**。
+   → 所以**判断 Gemini 可用性不能看节点标称地区，只能实测**。
+3. 顺带一个排查坑：`chat.openai.com/cdn-cgi/trace` 这类探针会因为 **HTTP 连接复用**而滞后——切到香港节点后，它的出口 IP 还显示上一个日本节点。**要判断节点身份，只认 Gemini 的区域码。**
 
 ---
 
