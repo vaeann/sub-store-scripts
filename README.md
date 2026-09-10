@@ -120,6 +120,12 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 
 另新增 `reject_vpn`（默认 `true`，与 subs-check 一致）：响应体命中 `vpn` 关键词时判为不可用。
 
+### 注意事项
+
+- **如果所有节点都被判为不可用**，先试 `reject_vpn=false`（`vpn` 关键词匹配是保守策略）。
+- `mode=both` 时 App 与 Web 两次请求**各自独立兜底**：其中一个超时/报错不会影响另一个的检测结果。
+- **两个脚本都未做过端到端实跑**：判定逻辑来自上游源码对齐 + 本地单元验证，开发机在墙内无法直连 Google / OpenAI。首次使用建议先小范围试跑、看下日志再全量应用。
+
 ### 模式与标签
 
 | `mode` | 检测内容 | 结果标签 |

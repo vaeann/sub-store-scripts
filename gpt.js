@@ -55,6 +55,10 @@
  * - [gpt_plus_prefix] 两者都可用时的前缀. 默认 "[GPT⁺] "
  * - [unusable_prefix] 给不可用节点也加前缀. 默认不加
  * - [reject_vpn] 命中 vpn 关键词即判不可用. 默认 true (与 subs-check 一致)
+ *   若发现所有节点都被判为不可用, 把该项设为 false 再试(reject_vpn=false)
+ *
+ * 注: mode=both 时, app 与 web 两次请求各自独立兜底 —— 其中一个超时/报错
+ *     不会影响另一个的检测结果。
  * - [keep_only_ok] 只保留可用节点. 默认 false
  * - [include_unsupported_proxy] 传递给运行环境时, 包含官方/商店版不支持的协议. 默认不包含
  * - [cache] 使用缓存, 默认不使用缓存
@@ -64,7 +68,7 @@
  *   _gpt          App 可用
  *   _gpt_web      Web/API 可用
  *   _gpt_plus     两者都可用
- *   _gpt_status   判定结果: ok / unsupported_country / vpn / http_xxx / failed / cached_failed
+ *   _gpt_status   判定结果: ok / unsupported_country / vpn / http_xxx / app_failed / web_failed / failed / cached_failed
  *   _gpt_latency / _gpt_web_latency  对应延迟
  */
 
@@ -165,44 +169,55 @@ async function operator(proxies = [], targetPlatform, context) {
       let webOk = false
       let appLatency
       let webLatency
-      let reason = 'failed'
+      let reason = null
 
       if (mode === 'app' || mode === 'both') {
-        const startedAt = Date.now()
-        const res = await http({
-          method,
-          headers: appHeaders(),
-          url: appUrl,
-          'policy-descriptor': node,
-          node,
-        })
-        appLatency = Date.now() - startedAt
-        const judged = judge(res)
-        appOk = judged.ok
-        if (!judged.ok) reason = judged.status
-        $.info(
-          `[${proxy.name}] [app] http: ${statusOf(res)}, result: ${judged.status}, latency: ${appLatency}`
-        )
+        // 单独兜住异常: 否则 app 请求超时/报错会直接跳过下面的 web 请求
+        try {
+          const startedAt = Date.now()
+          const res = await http({
+            method,
+            headers: appHeaders(),
+            url: appUrl,
+            'policy-descriptor': node,
+            node,
+          })
+          appLatency = Date.now() - startedAt
+          const judged = judge(res)
+          appOk = judged.ok
+          if (!judged.ok && !reason) reason = judged.status
+          $.info(
+            `[${proxy.name}] [app] http: ${statusOf(res)}, result: ${judged.status}, latency: ${appLatency}`
+          )
+        } catch (e) {
+          if (!reason) reason = 'app_failed'
+          $.error(`[${proxy.name}] [app] ${e.message ?? e}`)
+        }
       }
 
       if (mode === 'web' || mode === 'both') {
-        const startedAt = Date.now()
-        const res = await http({
-          method,
-          headers: {
-            'User-Agent': webUa,
-          },
-          url: webUrl,
-          'policy-descriptor': node,
-          node,
-        })
-        webLatency = Date.now() - startedAt
-        const judged = judge(res)
-        webOk = judged.ok
-        if (!judged.ok && !appOk) reason = judged.status
-        $.info(
-          `[${proxy.name}] [web] http: ${statusOf(res)}, result: ${judged.status}, latency: ${webLatency}`
-        )
+        try {
+          const startedAt = Date.now()
+          const res = await http({
+            method,
+            headers: {
+              'User-Agent': webUa,
+            },
+            url: webUrl,
+            'policy-descriptor': node,
+            node,
+          })
+          webLatency = Date.now() - startedAt
+          const judged = judge(res)
+          webOk = judged.ok
+          if (!judged.ok && !reason) reason = judged.status
+          $.info(
+            `[${proxy.name}] [web] http: ${statusOf(res)}, result: ${judged.status}, latency: ${webLatency}`
+          )
+        } catch (e) {
+          if (!reason) reason = 'web_failed'
+          $.error(`[${proxy.name}] [web] ${e.message ?? e}`)
+        }
       }
 
       if (appOk || webOk) {
@@ -216,7 +231,7 @@ async function operator(proxies = [], targetPlatform, context) {
         proxy._gpt = false
         proxy._gpt_web = false
         proxy._gpt_plus = false
-        proxy._gpt_status = reason
+        proxy._gpt_status = reason || 'failed'
         if (unusablePrefix) proxy.name = `${unusablePrefix}${proxy.name}`
         if (cacheEnabled) {
           $.info(`[${proxy.name}] 设置失败缓存`)
