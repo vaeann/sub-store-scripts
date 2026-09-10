@@ -29,6 +29,36 @@ https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js
 
 > URL 形式传参时，含空格/特殊字符的值需要 `encodeURIComponent`；在 Sub-Store 前端的可视化参数编辑器里填则不需要。
 
+### 推荐配置（可直接复制）
+
+**① ChatGPT**
+
+```
+https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gpt.js#timeout=1500&retries=1&retry_delay=500&concurrency=15&client=iOS&method=get&gpt_prefix=%5BGPT%5D%20&cache=true&keep_only_ok=true
+```
+
+**② Gemini**
+
+```
+https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/gemini.js#timeout=6000&retries=0&concurrency=20&method=get&samples=3&gemini_prefix=%5BGemini%5D%20&cache=true&keep_only_ok=true
+```
+
+**为什么这么配**
+
+| 选择 | 原因 |
+| --- | --- |
+| **两个都不写 `disable_failed_cache`** | 这是配合 `produce` + 缓存的关键：写了它，失败节点每次运行都要重测，缓存只省一半，Surge 仍会 `-1001` |
+| Gemini `timeout=6000`、`retries=0` | 预检 + 采样已相当于重试；`retries` 只会让死节点多挂几秒 |
+| Gemini `concurrency=20` | 单次载荷已从 2~3 次整页降到约 1.2 次，可以放开并发 |
+| Gemini `samples=3` | 缓存热了之后基本不跑，精度可以放宽；要更保守用 `samples=5` |
+| GPT `timeout=1500` | 端点只返回 77 字节，1.5 秒足够 |
+
+**注意事项**
+
+- **脚本操作顺序**：GPT 放前面、Gemini 放后面（GPT 几十毫秒，Gemini 要下载整页）。
+- **`keep_only_ok=true` 的风险**：一旦某次运行所有节点都失败，订阅会变空。缓解办法：保持 `cache=true`（缓存 48 小时），或改用 `unavailable_prefix=%5BX-Gemini%5D%20` 只标记不删。
+- **失败节点会被缓存**（不写 `disable_failed_cache` 的代价），默认 48 小时不重测。想让它更快恢复：在 Sub-Store 前端把缓存时长调成 6 小时（或设持久化变量 `sub-store-csr-expiration-time=21600000`），并让 `produce_cronexp` 跑得比它更频繁（如 `0 */2 * * *`）。
+
 ## 共同特性
 
 - **并发池**（`concurrency`）、**重试**（`retries` / `retry_delay`）、**缓存**（`cache`，成功与失败分开缓存）
