@@ -6,8 +6,9 @@ Surge / Loon / Egern 用的 **Sub-Store 节点检测脚本**，逐个节点检�
 | --- | --- | --- |
 | [`gemini.js`](gemini.js) | Gemini 可用性 | 解析 `gemini.google.com` 页面里的落地区域码 |
 | [`gpt.js`](gpt.js) | ChatGPT 可用性 | 请求 OpenAI 端点，检查响应体特征 |
+| [`surge-panel/sub-info.js`](surge-panel/sub-info.js) | Surge 面板：订阅用量 / 到期时间 | 读取订阅的 `subscription-userinfo` 响应头 |
 
-两者结构一致，可**串在同一个订阅上**，得到 `[GPT⁺] [Gemini] 香港01` 这样的名称。
+前两者结构一致，可**串在同一个订阅上**，得到 `[GPT⁺] [Gemini] 香港01` 这样的名称；第三个是 Surge 面板脚本，与订阅处理无关。
 
 ---
 
@@ -369,6 +370,63 @@ status == 403 && !/unsupported_country/.test(body?.error?.code || body?.error?.e
 相比之下，"解析区域码"是**结构化判定**：Google 会在页面里明确写出识别到的地区码，直接读它即可，准确且能顺带得到落地地区。
 
 > 注意：区域码法判断的是 **Gemini 网页端在服务端是否对你的出口地区放行**，不检查登录态与账号资格（如 Google AI Pro 订阅）——这类信息无法在不登录的情况下探测。
+
+---
+
+## surge-panel/sub-info.js — Surge 面板：订阅用量 / 到期
+
+基于 [cc63/Surge](https://github.com/cc63/Surge) 的 `Sub-info.js` 修改而来，读取订阅的 `subscription-userinfo` 响应头，在 Surge 面板上显示用量与到期时间。
+
+### 安装
+
+```ini
+[Script]
+SubInfo = type=generic,script-path=https://raw.githubusercontent.com/vaeann/sub-store-scripts/main/surge-panel/sub-info.js,timeout=15,argument="url=你的订阅链接&title=订阅信息&seconds=true"
+
+[Panel]
+SubInfo = title="订阅信息",content="加载中…",style=info,script-name=SubInfo,update-interval=60
+```
+
+⚠️ **`argument` 里的 url 必须 URL 编码**，否则订阅链接自带的 `&` 会把参数切断：
+
+```
+https://airport.com/sub?token=abc&flag=clash
+→ url=https%3A%2F%2Fairport.com%2Fsub%3Ftoken%3Dabc%26flag%3Dclash
+```
+
+（用浏览器控制台跑 `encodeURIComponent('你的订阅链接')` 直接生成即可）
+
+### 参数
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `url` | — | **必填**，订阅链接（URL 编码后）|
+| `title` | `订阅信息` | 面板标题 |
+| `icon` / `color` | `tornado` / `#DF4688` | 图标与颜色 |
+| `reset_day` | — | 流量重置日 1~31（响应头带 `reset_day` 时可省略）|
+| `expire` | — | 手动指定到期时间，覆盖响应头 |
+| `seconds` | `true` | **到期时间是否精确到秒**；设 `false` 只显示日期 |
+| `ua` | `Quantumult X` | 请求头（用于让机场返回流量信息）|
+
+### 相比上游的改动
+
+**修掉 2 个真 bug**
+
+1. **`formatTime` 里给 `const date` 重新赋值** → `expire` 是日期字符串时抛 `TypeError: Assignment to constant variable`，被外层 catch 吞掉，整块面板变成"订阅信息获取失败"。改成 `let`。
+2. **`total=0`（不限量套餐）** → `(used/total)*100` 得到 `Infinity`，面板显示"流量已使用Infinity%"。现在显示"用量：X / 不限量"。
+
+**功能增强**
+
+- **到期时间精确到秒**：`2027-03-05 14:23:45`（上游只到"日"）
+- 剩余时间分级显示：`175天22小时` / `1小时32分` / `1分32秒`
+- 取不到流量信息时**显示失败原因**，不再静默 `$done({})`
+- `getArgs` 改用 `indexOf("=")` 切分，参数值里含 `=` 也不会被截断
+- 头解析改用标准 `;` 分隔，`expire` 为日期字符串时不再被截成 NaN
+- 支持从响应头读取 `reset_day`；新增 `ua` 参数；`bytesToSize` 增加 NaN 保护
+
+### ⚠️ 许可证
+
+上游 `cc63/Surge` **未声明许可证**（license 字段为 null），本文件属于其修改版，**仅用于自用**，请不要再次分发或公开发布。
 
 ---
 
