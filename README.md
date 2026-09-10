@@ -152,8 +152,22 @@ SUB_STORE_PRODUCE_CRON=0 */4 * * *,sub,你的订阅name
 
 **方法 3：看 Surge 侧。** 编辑该订阅点「更新」，能正常完成不再 `-1001`，且更新很快。
 
-> 缓存时长在 Sub-Store 前端配置（≥2.16.0 可逐项设置）。**让它 ≥ produce 周期**，否则 produce 刷完缓存就过期了。
-> 若确实不想用失败缓存（怕节点被误判后长期不重测），就把 `produce_cronexp` 调密一些（如每 2 小时），用刷新频率换新鲜度。
+> **缓存时长不用你自己设** —— Sub-Store 有三层缓存，各有默认值：
+>
+> | 缓存 | 管什么 | 默认时长 |
+> | --- | --- | --- |
+> | 远程订阅缓存（`resourceCache`）| 上游机场订阅内容（key = url + UA）| **1 小时** |
+> | HTTP 头缓存（`headersResourceCache`）| 流量信息 | 1 分钟 |
+> | **脚本缓存（`scriptResourceCache`）** | **本脚本的各节点检测结果 ← 瓶颈在这里** | **48 小时** |
+>
+> 所以脚本缓存默认有 **48 小时**，produce 每 4~6 小时跑一次完全够用。想改默认时长可设置持久化变量 `sub-store-csr-expiration-time`（单位毫秒，默认 `172800000`）。
+>
+> ⚠️ **三件事别做**：
+> 1. **不要在脚本前面加 `scriptResourceCache._cleanup(undefined, 3600*1000)`** —— 那是"只保留 1 小时缓存"，会白白破坏 produce 的效果。
+> 2. **不要给订阅链接加 `noCache`**（`?noCache=true` 或内部链接 `#noCache`）—— 会让每次拉取都重新检测，必然超时。
+> 3. **不要用 `scriptResourceCache.revokeAll()`** —— 会清空全部脚本缓存，下次全部重跑。
+>
+> 若确实不想用失败缓存（怕节点被误判后长期不重测），就把 `produce_cronexp` 调密一些（如每 1~2 小时），用刷新频率换新鲜度。
 
 ---
 
